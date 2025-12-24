@@ -3,6 +3,7 @@ from threading import Lock
 
 import pyrootutils
 import uvicorn
+from pydantic import ValidationError
 from kui.asgi import (
     Depends,
     FactoryClass,
@@ -64,6 +65,7 @@ class API(ExceptionHandler):
             routes=self.routes + self.openapi[1:],  # Remove the default route
             exception_handlers={
                 HTTPException: self.http_exception_handler,
+                ValidationError: self.validation_exception_handler,
                 Exception: self.other_exception_handler,
             },
             factory_class=FactoryClass(http=MsgPackRequest),

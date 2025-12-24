@@ -87,6 +87,10 @@ def get_content_type(audio_format):
         return "audio/flac"
     elif audio_format == "mp3":
         return "audio/mpeg"
+    elif audio_format == "pcm":
+        return "audio/pcm"
+    elif audio_format == "opus":
+        return "audio/ogg;codecs=opus"
     else:
         return "application/octet-stream"
 

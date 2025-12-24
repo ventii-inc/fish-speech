@@ -82,13 +82,15 @@ class ServeTTSRequest(BaseModel):
     text: str
     chunk_length: Annotated[int, conint(ge=100, le=300, strict=True)] = 200
     # Audio format
-    format: Literal["wav", "pcm", "mp3"] = "wav"
+    format: Literal["wav", "pcm", "mp3", "opus"] = Field(
+        "wav", alias="output_format"
+    )
     # References audios for in-context learning
     references: list[ServeReferenceAudio] = []
     # Reference id
     # For example, if you want use https://fish.audio/m/7f92f8afb8ec43bf81429cc1c9199cb1/
     # Just pass 7f92f8afb8ec43bf81429cc1c9199cb1
-    reference_id: str | None = None
+    reference_id: str | None = Field(default=None, alias="voice_id")
     seed: int | None = None
     use_memory_cache: Literal["on", "off"] = "off"
     # Normalize text for en & zh, this increase stability for numbers
@@ -99,10 +101,15 @@ class ServeTTSRequest(BaseModel):
     top_p: Annotated[float, Field(ge=0.1, le=1.0, strict=True)] = 0.8
     repetition_penalty: Annotated[float, Field(ge=0.9, le=2.0, strict=True)] = 1.1
     temperature: Annotated[float, Field(ge=0.1, le=1.0, strict=True)] = 0.8
+    # Optional compatibility fields (ignored in inference but accepted to match plugin)
+    sample_rate: int | None = 24000
+    num_channels: int | None = 1
+    model: str | None = "s1"
 
     class Config:
         # Allow arbitrary types for pytorch related types
         arbitrary_types_allowed = True
+        populate_by_name = True
 
 
 class AddReferenceRequest(BaseModel):

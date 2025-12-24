@@ -11,15 +11,20 @@ import numpy as np
 import ormsgpack
 import soundfile as sf
 import torch
+import asyncio
+import torchaudio
+
 from kui.asgi import (
     Body,
     HTTPException,
     HttpView,
     JSONResponse,
     Routes,
+    SocketView,
     StreamResponse,
     UploadFile,
     request,
+    websocket,
 )
 from loguru import logger
 from typing_extensions import Annotated
@@ -52,6 +57,19 @@ from tools.server.model_utils import (
 MAX_NUM_SAMPLES = int(os.getenv("NUM_SAMPLES", 1))
 
 routes = Routes()
+
+
+def _resample_if_needed(audio_np: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+    """Resample 1D float audio to target_sr if different."""
+    if target_sr is None or target_sr == orig_sr:
+        return audio_np
+    try:
+        audio_t = torch.from_numpy(audio_np).unsqueeze(0)  # (1, T)
+        resampled = torchaudio.functional.resample(audio_t, orig_sr, target_sr)
+        return resampled.squeeze(0).numpy()
+    except Exception as e:
+        logger.warning(f"[RESAMPLE] failed {orig_sr}->{target_sr}, using original: {e}")
+        return audio_np
 
 
 @routes.http("/v1/health")
@@ -145,11 +163,17 @@ async def tts(req: Annotated[ServeTTSRequest, Body(exclusive=True)]):
             )
 
         # Check if streaming is enabled
-        if req.streaming and req.format != "wav":
+        # Allow pcm/wav streaming (matches fish-audio cloud)
+        if req.streaming and req.format not in ("wav", "pcm"):
             raise HTTPException(
                 HTTPStatus.BAD_REQUEST,
-                content="Streaming only supports WAV format",
+                content="Streaming only supports WAV or PCM format",
             )
+
+        # Normalize alias fields from client (output_format/voice_id)
+        req.format = req.format or "pcm"
+        if req.reference_id is None:
+            req.reference_id = getattr(req, "voice_id", None)
 
         # Perform TTS
         if req.streaming:
@@ -162,21 +186,30 @@ async def tts(req: Annotated[ServeTTSRequest, Body(exclusive=True)]):
             )
         else:
             fake_audios = next(inference(req, engine))
-            buffer = io.BytesIO()
-            sf.write(
-                buffer,
-                fake_audios,
-                sample_rate,
-                format=req.format,
-            )
+            if req.format == "pcm":
+                # Return raw little-endian int16 PCM
+                pcm_bytes = (fake_audios * 32768).astype(np.int16).tobytes()
+                return StreamResponse(
+                    iterable=buffer_to_async_generator(pcm_bytes),
+                    headers={"Content-Disposition": "attachment; filename=audio.pcm"},
+                    content_type="audio/pcm",
+                )
+            else:
+                buffer = io.BytesIO()
+                sf.write(
+                    buffer,
+                    fake_audios,
+                    sample_rate,
+                    format=req.format,
+                )
 
-            return StreamResponse(
-                iterable=buffer_to_async_generator(buffer.getvalue()),
-                headers={
-                    "Content-Disposition": f"attachment; filename=audio.{req.format}",
-                },
-                content_type=get_content_type(req.format),
-            )
+                return StreamResponse(
+                    iterable=buffer_to_async_generator(buffer.getvalue()),
+                    headers={
+                        "Content-Disposition": f"attachment; filename=audio.{req.format}",
+                    },
+                    content_type=get_content_type(req.format),
+                )
     except HTTPException:
         # Re-raise HTTP exceptions as they are already properly formatted
         raise
@@ -460,3 +493,125 @@ async def update_reference(
             new_reference_id=new_reference_id if "new_reference_id" in locals() else "",
         )
         return format_response(response, status_code=500)
+
+
+@routes.websocket("/v1/tts/live")
+class TTSLiveWebSocket(SocketView):
+    """
+    WebSocket endpoint for real-time TTS streaming.
+    Compatible with Fish Audio WebSocket protocol.
+    """
+
+    encoding = "bytes"  # MessagePack binary format
+
+    async def on_connect(self):
+        await websocket.accept()
+        self.text_buffer = []
+        self.request_config = {}
+        self.started = False
+        logger.info("[WS] TTS WebSocket connection accepted")
+
+    async def on_receive(self, data):
+        try:
+            msg = ormsgpack.unpackb(data)
+        except Exception as e:
+            logger.error(f"[WS] Failed to decode MessagePack message: {e}")
+            logger.error(f"[WS] Raw data (first 200 bytes): {data[:200]}")
+            return
+
+        # Log ALL raw messages for debugging
+        logger.info(f"[WS] Raw message: event={msg.get('event')}, keys={list(msg.keys())}")
+
+        event = msg.get("event")
+
+        if event == "start":
+            self.request_config = msg.get("request", {})
+            self.started = True
+            logger.info(f"[WS] TTS session started with config: {self.request_config}")
+            # Explicitly ack start so clients don't time out waiting
+            await websocket.send(
+                {
+                    "type": "websocket.send",
+                    "bytes": ormsgpack.packb(
+                        {
+                            "event": "start",
+                            "status": "ok",
+                            "sample_rate": self.request_config.get(
+                                "sample_rate",
+                                websocket.app.state.model_manager.tts_inference_engine.decoder_model.sample_rate,
+                            ),
+                            "format": self.request_config.get("output_format", self.request_config.get("format", "pcm")),
+                        }
+                    ),
+                }
+            )
+
+        elif event == "text":
+            text = msg.get("text", "")
+            logger.info(f"[WS] Received text event: '{text[:50]}...' (total buffer: {len(self.text_buffer) + 1})")
+            if text:
+                # Some clients (e.g. livekit fishaudio plugin) expect synthesis per text event
+                # so we synthesize immediately to avoid idle disconnects.
+                self.text_buffer = [text]
+                await self._synthesize_and_send(text)
+                # Clear buffer to avoid duplicate synthesis on stop/flush
+                self.text_buffer = []
+
+        elif event == "flush":
+            logger.info(f"[WS] Received flush event, buffer size: {len(self.text_buffer)}")
+            if self.text_buffer:
+                buffered_text = "".join(self.text_buffer)
+                self.text_buffer = []
+                await self._synthesize_and_send(buffered_text)
+
+        elif event == "stop":
+            logger.info(f"[WS] Received stop event, buffer size: {len(self.text_buffer)}")
+            if self.text_buffer:
+                buffered_text = "".join(self.text_buffer)
+                self.text_buffer = []
+                await self._synthesize_and_send(buffered_text)
+            await websocket.send({"type": "websocket.send", "bytes": ormsgpack.packb({"event": "finish", "reason": "stop"})})
+
+    async def _synthesize_and_send(self, text: str):
+        # Get engine from app state
+        model_manager: ModelManager = websocket.app.state.model_manager
+        engine = model_manager.tts_inference_engine
+
+        if not text.strip():
+            return
+
+        req = ServeTTSRequest(
+            text=text,
+            output_format=self.request_config.get("output_format", self.request_config.get("format", "pcm")),
+            voice_id=self.request_config.get("reference_id") or self.request_config.get("voice_id"),
+            chunk_length=self.request_config.get("chunk_length", 200),
+            streaming=False,
+            sample_rate=self.request_config.get("sample_rate"),
+        )
+
+        logger.info(f"[WS] Synthesizing: {text[:50]}...")
+
+        # Run inference in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+
+        def run_inference():
+            # Run TTS inference and collect only the segment audio data
+            audio_segments = []
+            for result in engine.inference(req):
+                if result.code == "segment" and isinstance(result.audio, tuple):
+                    # Convert float audio to int16 PCM bytes
+                    audio_data = (result.audio[1] * 32768).astype(np.int16).tobytes()
+                    audio_segments.append(audio_data)
+            return audio_segments
+
+        try:
+            audio_chunks = await loop.run_in_executor(None, run_inference)
+            for chunk in audio_chunks:
+                await websocket.send(
+                    {"type": "websocket.send", "bytes": ormsgpack.packb({"event": "audio", "audio": chunk})}
+                )
+        except Exception as e:
+            logger.error(f"[WS] TTS inference error: {e}", exc_info=True)
+
+    async def on_disconnect(self, close_code):
+        logger.info(f"[WS] TTS session disconnected with code: {close_code}")
