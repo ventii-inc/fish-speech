@@ -44,9 +44,14 @@ wheels/
 *.egg
 MANIFEST
 
-# Virtual Environments
+# Environment Files
 # --------------------
 .env
+.env.local
+.env.production
+
+# Virtual Environments
+# --------------------
 .venv
 env/
 venv/

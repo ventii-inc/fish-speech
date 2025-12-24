@@ -83,6 +83,66 @@ class Health(HttpView):
         return JSONResponse({"status": "ok"})
 
 
+@routes.http.get("/health/live")
+async def health_live():
+    """Liveness probe - returns 200 if process is running."""
+    return JSONResponse({"status": "alive"})
+
+
+@routes.http.get("/health/ready")
+async def health_ready():
+    """Readiness probe - checks if model is loaded and GPU available."""
+    checks = {
+        "model_loaded": False,
+        "gpu_available": False,
+        "gpu_memory_ok": False,
+    }
+
+    try:
+        # Check if model manager is initialized
+        app_state = request.app.state
+        if hasattr(app_state, "model_manager") and app_state.model_manager is not None:
+            model_manager: ModelManager = app_state.model_manager
+            if hasattr(model_manager, "tts_inference_engine") and model_manager.tts_inference_engine is not None:
+                checks["model_loaded"] = True
+
+        # Check GPU availability and memory
+        if torch.cuda.is_available():
+            checks["gpu_available"] = True
+            # Check if we have at least 1GB free GPU memory
+            free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
+            checks["gpu_memory_ok"] = free_memory > 1_000_000_000  # 1GB
+            checks["gpu_memory_free_gb"] = round(free_memory / 1_000_000_000, 2)
+        else:
+            # CPU mode - skip GPU checks
+            checks["gpu_available"] = True
+            checks["gpu_memory_ok"] = True
+
+        # All checks must pass for readiness
+        is_ready = checks["model_loaded"] and checks["gpu_available"] and checks["gpu_memory_ok"]
+
+        if is_ready:
+            return JSONResponse({"status": "ready", "checks": checks})
+        else:
+            return JSONResponse({"status": "not_ready", "checks": checks}, status_code=503)
+
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return JSONResponse({"status": "error", "error": str(e)}, status_code=503)
+
+
+@routes.http.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    from tools.server.metrics import get_metrics_response
+
+    metrics_output, content_type = get_metrics_response()
+    return StreamResponse(
+        iterable=buffer_to_async_generator(metrics_output),
+        content_type=content_type,
+    )
+
+
 @routes.http.post("/v1/vqgan/encode")
 async def vqgan_encode(req: Annotated[ServeVQGANEncodeRequest, Body(exclusive=True)]):
     """
