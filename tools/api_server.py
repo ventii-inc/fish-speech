@@ -132,11 +132,19 @@ rate_limiter = RateLimiter()
 
 
 class API(ExceptionHandler):
+    # Public paths that don't require authentication or rate limiting
+    PUBLIC_PATHS = {"/", "/json", "/v1/health", "/health/live", "/health/ready", "/metrics"}
+
     def __init__(self):
         self.args = parse_args()
 
         def api_auth(endpoint):
             async def verify(token: Annotated[str, Depends(bearer_auth)]):
+                # Skip auth for public paths
+                path = request.url.path
+                if path in API.PUBLIC_PATHS or path.startswith("/health/"):
+                    return await endpoint()
+
                 if token != self.args.api_key:
                     raise HTTPException(401, None, "Invalid token")
 
@@ -151,6 +159,11 @@ class API(ExceptionHandler):
                 return await endpoint()
 
             async def passthrough():
+                # Skip rate limiting for public paths
+                path = request.url.path
+                if path in API.PUBLIC_PATHS or path.startswith("/health/"):
+                    return await endpoint()
+
                 # Rate limiting for unauthenticated requests (by IP, per hour)
                 if RATE_LIMIT_ENABLED:
                     # Get client IP from request
@@ -233,9 +246,11 @@ class API(ExceptionHandler):
 # outputs if multiple threads access the same buffers simultaneously.
 # Instead, it's better to use multiprocessing or independent models per thread.
 
-if __name__ == "__main__":
-    api = API()
+# Create API instance and expose app for uvicorn/FastAPI run config
+api = API()
+app = api.app  # Expose for: uvicorn tools.api_server:app
 
+if __name__ == "__main__":
     # IPv6 address format is [xxxx:xxxx::xxxx]:port
     match = re.search(r"\[([^\]]+)\]:(\d+)$", api.args.listen)
     if match:

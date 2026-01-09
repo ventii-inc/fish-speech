@@ -1,3 +1,4 @@
+import os
 from argparse import ArgumentParser
 from http import HTTPStatus
 from typing import Annotated, Any
@@ -19,28 +20,35 @@ from tools.server.inference import inference_wrapper as inference
 
 
 def parse_args():
+    """Parse CLI args with env var fallbacks for uvicorn compatibility."""
     parser = ArgumentParser()
     parser.add_argument("--mode", type=str, choices=["tts"], default="tts")
     parser.add_argument(
         "--llama-checkpoint-path",
         type=str,
-        default="checkpoints/openaudio-s1-mini",
+        default=os.getenv("FISH_LLAMA_CHECKPOINT", "checkpoints/openaudio-s1-mini"),
     )
     parser.add_argument(
         "--decoder-checkpoint-path",
         type=str,
-        default="checkpoints/openaudio-s1-mini/codec.pth",
+        default=os.getenv("FISH_DECODER_CHECKPOINT", "checkpoints/openaudio-s1-mini/codec.pth"),
     )
-    parser.add_argument("--decoder-config-name", type=str, default="modded_dac_vq")
-    parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--half", action="store_true")
-    parser.add_argument("--compile", action="store_true")
-    parser.add_argument("--max-text-length", type=int, default=0)
-    parser.add_argument("--listen", type=str, default="127.0.0.1:8080")
-    parser.add_argument("--workers", type=int, default=1)
-    parser.add_argument("--api-key", type=str, default=None)
+    parser.add_argument(
+        "--decoder-config-name",
+        type=str,
+        default=os.getenv("FISH_DECODER_CONFIG", "modded_dac_vq"),
+    )
+    parser.add_argument("--device", type=str, default=os.getenv("FISH_DEVICE", "cuda"))
+    parser.add_argument("--half", action="store_true", default=os.getenv("FISH_HALF", "").lower() == "true")
+    parser.add_argument("--compile", action="store_true", default=os.getenv("FISH_COMPILE", "").lower() == "true")
+    parser.add_argument("--max-text-length", type=int, default=int(os.getenv("FISH_MAX_TEXT_LENGTH", "0")))
+    parser.add_argument("--listen", type=str, default=os.getenv("FISH_LISTEN", "0.0.0.0:8080"))
+    parser.add_argument("--workers", type=int, default=int(os.getenv("FISH_WORKERS", "1")))
+    parser.add_argument("--api-key", type=str, default=os.getenv("FISH_API_KEY", None))
 
-    return parser.parse_args()
+    # Use parse_known_args to ignore uvicorn's arguments
+    args, _ = parser.parse_known_args()
+    return args
 
 
 class MsgPackRequest(HttpRequest):

@@ -1072,12 +1072,15 @@ dependencies = [
     { name = "numpy" },
     { name = "opencc-python-reimplemented" },
     { name = "ormsgpack" },
+    { name = "prometheus-client" },
     { name = "pyaudio" },
     { name = "pydantic" },
     { name = "pydub" },
     { name = "pyrootutils" },
+    { name = "python-dotenv" },
     { name = "resampy" },
     { name = "rich" },
+    { name = "sentry-sdk", extra = ["starlette"] },
     { name = "silero-vad" },
     { name = "tensorboard" },
     { name = "tiktoken" },
@@ -1144,12 +1147,15 @@ requires-dist = [
     { name = "numpy", specifier = "<=1.26.4" },
     { name = "opencc-python-reimplemented", specifier = "==0.1.7" },
     { name = "ormsgpack" },
+    { name = "prometheus-client", specifier = ">=0.20.0" },
     { name = "pyaudio" },
     { name = "pydantic", specifier = "==2.9.2" },
     { name = "pydub" },
     { name = "pyrootutils", specifier = ">=1.0.4" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "resampy", specifier = ">=0.4.3" },
     { name = "rich", specifier = ">=13.5.3" },
+    { name = "sentry-sdk", extras = ["starlette"], specifier = ">=2.0.0" },
     { name = "silero-vad" },
     { name = "tensorboard", specifier = ">=2.14.1" },
     { name = "tiktoken", specifier = ">=0.8.0" },
@@ -3550,6 +3556,15 @@ wheels = [
 ]
 
 [[package]]
+name = "prometheus-client"
+version = "0.23.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/23/53/3edb5d68ecf6b38fcbcc1ad28391117d2a322d9a1a3eff04bfdb184d8c3b/prometheus_client-0.23.1.tar.gz", hash = "sha256:6ae8f9081eaaaf153a2e959d2e6c4f4fb57b12ef76c8c7980202f1e57b48b2ce", size = 80481, upload-time = "2025-09-18T20:47:25.043Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/db/14bafcb4af2139e046d03fd00dea7873e48eafe18b7d2797e73d6681f210/prometheus_client-0.23.1-py3-none-any.whl", hash = "sha256:dd1913e6e76b59cfe44e7a4b83e01afc9873c1bdfd2ed8739f1e76aeca115f99", size = 61145, upload-time = "2025-09-18T20:47:23.875Z" },
+]
+
+[[package]]
 name = "prompt-toolkit"
 version = "3.0.52"
 source = { registry = "https://pypi.org/simple" }
@@ -4460,6 +4475,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/78/be/ffc232c32d0be18f8e4eff7a22dffc1f1fef2894703d64cc281a80e75da6/sentry_sdk-2.37.1.tar.gz", hash = "sha256:531751da91aa62a909b42a7be155b41f6bb0de9df6ae98441d23b95de2f98475", size = 346235, upload-time = "2025-09-09T13:48:27.137Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f3/c3/cba447ab531331d165d9003c04473be944a308ad916ca2345b5ef1969ed9/sentry_sdk-2.37.1-py2.py3-none-any.whl", hash = "sha256:baaaea6608ed3a639766a69ded06b254b106d32ad9d180bdbe58f3db9364592b", size = 368307, upload-time = "2025-09-09T13:48:25.271Z" },
+]
+
+[package.optional-dependencies]
+starlette = [
+    { name = "starlette" },
 ]
 
 [[package]]
